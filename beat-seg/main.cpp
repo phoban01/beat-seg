@@ -105,7 +105,6 @@ int main(int argc, const char * argv[]) {
 		}
 		plotc << endl;
 	}
-	plotc << "e\ne\n";
 	
 	plotc.close();
 	
