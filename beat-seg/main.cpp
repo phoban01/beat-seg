@@ -8,8 +8,20 @@
 
 #include <iostream>
 
+#include "essentia/essentia.h"
+#include "essentia/essentiamath.h"
+#include "essentia/algorithm.h"
+#include "essentia/algorithmfactory.h"
+#include "essentia/streaming/algorithms/poolstorage.h"
+#include "essentia/scheduler/network.h"
+
+#include "armadillo"
+
+
 int main(int argc, const char * argv[]) {
-	// insert code here...
-	std::cout << "Hello, World!\n";
-    return 0;
+
+	
+	
+	
+	return 0;
 }
