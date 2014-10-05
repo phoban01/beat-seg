@@ -23,6 +23,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		2619806A19E19B3800A4C2AA /* beat-seg.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "beat-seg.h"; sourceTree = SOURCE_ROOT; };
 		2682F15F19DB28D2001F2204 /* beat-seg */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "beat-seg"; sourceTree = BUILT_PRODUCTS_DIR; };
 		2682F16219DB28D2001F2204 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -57,6 +58,7 @@
 		2682F16119DB28D2001F2204 /* beat-seg */ = {
 			isa = PBXGroup;
 			children = (
+				2619806A19E19B3800A4C2AA /* beat-seg.h */,
 				2682F16219DB28D2001F2204 /* main.cpp */,
 			);
 			path = "beat-seg";
@@ -224,6 +226,8 @@
 					"-lfftw3f",
 					"-larmadillo",
 					"-lmlpack",
+					"-lopencv_core",
+					"-lopencv_imgproc",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -254,6 +258,8 @@
 					"-lfftw3f",
 					"-larmadillo",
 					"-lmlpack",
+					"-lopencv_core",
+					"-lopencv_imgproc",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -278,6 +284,7 @@
 				2682F16819DB28D2001F2204 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};

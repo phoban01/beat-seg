@@ -8,6 +8,9 @@
 
 #include <iostream>
 
+#include "opencv2/core/core.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+
 #include "essentia/essentia.h"
 #include "essentia/essentiamath.h"
 #include "essentia/algorithm.h"
@@ -19,131 +22,245 @@
 #include "mlpack/methods/neighbor_search/neighbor_search.hpp"
 #include "armadillo"
 
+#include "beat-seg.h"
+
 using namespace std;
 using namespace essentia;
 using namespace essentia::standard;
 using namespace arma;
 using namespace mlpack::neighbor;
 
+//Methods
+mat runAnalysis(string audiopath);
+void medianFilter(mat& M, int k = 8);
+//void gaussianFilter();
+//void gaussianKernel();
+mat recurrence_matrix(mat& M);
+mat downsample(mat& X,int v);
+void noveltyCurve();
+void pickPeaks();
+void circularShift();
+void embed(mat& M);
+void segment();
 
-Mat<double> RP(std::vector<std::vector<float>>input);
-double cos_distance(std::vector<float> v1, std::vector<float> v2);
+void normalizeMatrix(mat& m);
+void write_matrix(mat& m);
 
+int frameSize = 4096;
+int hopSize = 2048;
+
+//Analysis Output Storage
+std::vector<Real> audioBuffer,startTimes,endTimes,peakM,peakF,frame,spectrum,chroma;
+std::vector<Real> onsets = {0};
+std::vector<std::vector<Real>> slicedFrames;
+Real rate,dur;
 
 int main(int argc, const char * argv[]) {
 	
 	string audioFilename = argv[1];
-	
-	essentia::init();
-	
-	AlgorithmFactory& factory = standard::AlgorithmFactory::instance();
-	Algorithm* audio = factory.create("EasyLoader","filename",audioFilename);
-	Algorithm* duration = factory.create("Duration");
-	
-	Algorithm* onsetDetection = factory.create("OnsetRate");
-	
-	std::vector<Real> audioBuffer,onsets,startTimes,endTimes,peakM,peakF,frame,chroma;
-	std::vector<std::vector<Real>> slicedFrames,chromaVector;
-	Real rate,dur;
-	audio->output("audio").set(audioBuffer);
-	
-	duration->input("signal").set(audioBuffer);
-	duration->output("duration").set(dur);
-	
-	onsetDetection->input("signal").set(audioBuffer);
-	onsetDetection->output("onsets").set(onsets);
-	onsetDetection->output("onsetRate").set(rate);
 
-	audio->compute();
-	duration->compute();
-	onsetDetection->compute();
+	mat R = runAnalysis(audioFilename);
 	
-//	std::cout << onsets << std::endl;
-	startTimes.push_back(0);endTimes.push_back(onsets[0]);
-	
-	for (int i = 0; i < onsets.size() - 1; ++i) {
-		startTimes.push_back(onsets[i]);
-		endTimes.push_back(onsets[i+1]);
-	}
-	
-	Algorithm* slicer = factory.create("Slicer","endTimes",endTimes,"startTimes",startTimes);
-	slicer->input("audio").set(audioBuffer);
-	slicer->output("frame").set(slicedFrames);
-	
-	audio->compute();
-	slicer->compute();
-	
-	std::cout << slicedFrames.size() << std::endl;
+//	R = downsample(R, 2);
 
-	Algorithm* spectrum = factory.create("Spectrum");
-	Algorithm* peaks = factory.create("SpectralPeaks");
-	spectrum->output("spectrum").set(frame);
-	peaks->input("spectrum").set(frame);
-	peaks->output("frequencies").set(peakF);
-	peaks->output("magnitudes").set(peakM);
+	cout << R.size() << endl;
 
-	Algorithm* hpcp = factory.create("HPCP");
+//	embed(R);
 	
-	hpcp->input("frequencies").set(peakF);
-	hpcp->input("magnitudes").set(peakM);
-	hpcp->output("hpcp").set(chroma);
+	mat RP = recurrence_matrix(R);
 	
-	ofstream plotc("/users/piarashoban/documents/codingProjects/beat-seg/chroma.txt");
-
+	cout << "Writing" << endl;
 	
-	for (int i = 0; i < slicedFrames.size();++i) {
-		if (slicedFrames[i].size() % 2 != 0) {slicedFrames[i].push_back(0);}
-		spectrum->input("frame").set(slicedFrames[i]);
-		spectrum->compute();
-		peaks->compute();
-		hpcp->compute();
-		
-		chromaVector.push_back(chroma);
-		
-		for (int j = 0;j < 12;++j) {
-			plotc << chroma[j] << " ";
-		}
-		plotc << endl;
-	}
-	
-	plotc.close();
-	
-//	mat sim = RP(chromaVector);
+	write_matrix(RP);
 	
 	
 	return 0;
 }
 
-Mat<double> RP(std::vector<std::vector<float>>input)
+mat runAnalysis(string audiopath)
 {
 	
-	int n = (int)input.size();
-
-	Mat<double> R(n,n);
 	
-	for (int i = 0; i < n; ++i) {
-		for (int j = 0; j < n; ++j) {
-				R(i,j) = cos_distance(input[i], input[j]);
+	essentia::init();
+	
+	//Algorithms
+	AlgorithmFactory& factory = standard::AlgorithmFactory::instance();
+	Algorithm* audio = factory.create("EasyLoader","filename",audiopath);
+	Algorithm* duration = factory.create("Duration");
+	Algorithm* onsetDetection = factory.create("OnsetRate");
+	Algorithm* framecutter = factory.create("FrameCutter","frameSize",frameSize,"hopSize",hopSize);
+	Algorithm* fft = factory.create("Spectrum","size",frameSize);
+	Algorithm* peaks = factory.create("SpectralPeaks");
+	Algorithm* hpcp = factory.create("HPCP");
+	
+	//Processes
+	audio->output("audio").set(audioBuffer);
+	
+	duration->input("signal").set(audioBuffer);
+	duration->output("duration").set(dur);
+	
+	framecutter->input("signal").set(audioBuffer);
+	framecutter->output("frame").set(frame);
+	
+	fft->input("frame").set(frame);
+	fft->output("spectrum").set(spectrum);
+	
+	peaks->input("spectrum").set(frame);
+	peaks->output("frequencies").set(peakF);
+	peaks->output("magnitudes").set(peakM);
+	
+	hpcp->input("frequencies").set(peakF);
+	hpcp->input("magnitudes").set(peakM);
+	hpcp->output("hpcp").set(chroma);
+	
+	onsetDetection->input("signal").set(audioBuffer);
+	onsetDetection->output("onsets").set(onsets);
+	onsetDetection->output("onsetRate").set(rate);
+	
+	audio->compute();
+	duration->compute();
+	onsetDetection->compute();
+	onsets.push_back(dur);
+	
+	int c = 0;
+	
+	mat M;
+	
+	while (true) {
+		framecutter->compute();
+		
+		if (!frame.size()) {
+			break;
 		}
-		cout << "-------> " << (i/(float)n)*100 << "%...\r";
-		cout.flush();
+		
+		fft->compute();
+		peaks->compute();
+		hpcp->compute();
+		M.insert_cols(c,conv_to<colvec>::from(chroma));
+		c++;
+		
 	}
 	
-	return R;
+	//CleanUp
+	delete audio;
+	delete duration;
+	delete onsetDetection;
+	delete framecutter;
+	delete fft;
+	delete peaks;
+	delete hpcp;
+
+	essentia::shutdown();
+	
+	return M;
 }
 
-double cos_distance(std::vector<float> v1, std::vector<float> v2)
+void write_matrix(mat& m)
 {
-	int N = (int)v1.size();
-	float dot = 0.0;
-	float mag1 = 0.0;
-	float mag2 = 0.0;
-	int n;
-	for (n = 0; n < N; ++n)
-	{
-		dot += v1[n] * v2[n];
-		mag1 += pow(v1[n], 2);
-		mag2 += pow(v2[n], 2);
-	}
-	return exp((dot / (sqrt(mag1) * sqrt(mag2)))-1);
+	ofstream myfile("chroma.txt");
+	
+	myfile << m;
+	
+	myfile.close();
+
+	system("gnuplot plotchroma.gnuplot");
 }
+
+void medianFilter(mat& M, int k)
+{
+	cout << M.n_rows << endl;
+	for (int i = 0 ; i < M.n_rows; ++i) {
+		for (int j = 0 ; j < M.n_cols - k/2; ++j) {
+			if (j < k/2) {
+				M.at(i,j) = median(M.cols(j,j+k/2)(i));
+			} else {
+				M.at(i,j) = median(M.cols(j-k/2,j+k/2)(i));
+			}
+	 	}
+	}
+}
+
+void normalizeMatrix(mat& M)
+{
+	double min = M.min();
+	double max = M.max();
+	
+	M = M + min;
+	M = M / max;
+}
+
+int col_includes(const Col<size_t> x,const int j) {
+	int val = 0;
+	
+	for (int i = 0; i < x.size(); ++i) {
+		if (x(i) == j) {
+			val = 1;
+			break;
+		}
+	}
+	
+	return val;
+}
+
+mat recurrence_matrix(mat& M)
+{
+	int n = M.n_cols;
+	int K = n * 0.001;
+	mat RP(n,n);
+
+	for  (int i = 0; i < n; ++i) {
+		for (int j = 0; j < n; ++j) {
+			RP(i,j) = sqrt(sum((M.col(j) - M.col(i))));
+		}
+	}
+	
+//	RP = cor(M,M.t());
+//	AllkNN a(M);
+//	Mat<size_t> resultingNeighbors;
+//	mat resultingDistances;
+//
+//	a.Search(K,resultingNeighbors,resultingDistances);
+//	int n2 = resultingNeighbors.n_cols;
+//
+//	for (int i = 0; i < n; ++i) {
+//		for (int j = 0; j < n; ++j) {
+//			RP(i,j) =	1 - (col_includes(resultingNeighbors.col(i),j)
+//						&&
+//						col_includes(resultingNeighbors.col(j),i));
+//		}
+//		cout << "-------> " << (i/(float)n2)*100 << "%...\r";
+//		cout.flush();
+//	}
+	return RP;
+}
+
+void embed(mat& M)
+{
+	int t = 1;
+	int m = 10;
+	int n = (int)M.n_cols - (m-1);
+	
+	mat H;
+	
+	for (int i = 0; i < n;++i) {
+		colvec x = M.col(i);
+		for (int j = 0; j < m;++j) {
+			x = join_cols(x,M.col(i+j));
+		}
+		H.insert_cols(i,x);
+	}
+	M = H;
+}
+
+mat downsample(mat& X,int v)
+{
+	int n = X.n_cols;
+	mat H;
+	for (int i=0; i < n/v;++i) {
+		Mat<double> Y = X.cols(i*v,((i+1)*v)-1);
+		colvec sumy = sum(Y,1);
+		H.insert_cols(i,sumy);
+	}
+	return H;
+}
+
