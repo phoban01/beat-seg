@@ -20,6 +20,7 @@
 
 #include "mlpack/core.hpp"
 #include "mlpack/methods/neighbor_search/neighbor_search.hpp"
+
 #include "armadillo"
 
 #include "beat-seg.h"
@@ -30,49 +31,52 @@ using namespace essentia::standard;
 using namespace arma;
 using namespace mlpack::neighbor;
 
-//Methods
+//functions
 mat runAnalysis(string audiopath);
 void medianFilter(mat& M, int k = 8);
-//void gaussianFilter();
-//void gaussianKernel();
-mat recurrence_matrix(mat& M);
+mat recurrence_matrix(mat& M,int metric = 1);
 mat downsample(mat& X,int v);
+mat beatsync(mat& X,std::vector<Real> p);
+mat ckernel(int n);
+void embed(mat& M,int m = 10);
+
 void noveltyCurve();
 void pickPeaks();
 void circularShift();
-void embed(mat& M);
 void segment();
 
 void normalizeMatrix(mat& m);
 void write_matrix(mat& m);
 
-int frameSize = 4096;
-int hopSize = 2048;
+const int SAMPLERATE = 44100;
+const int frameSize = 4096;
+const int hopSize = 4096;
+const double FRAMEDUR = SAMPLERATE/(double)frameSize;
 
 //Analysis Output Storage
-std::vector<Real> audioBuffer,startTimes,endTimes,peakM,peakF,frame,spectrum,chroma;
+std::vector<Real> audioBuffer,startTimes,endTimes,peakM,peakF,frame,wframe,spectrum,chroma;
 std::vector<Real> onsets = {0};
 std::vector<std::vector<Real>> slicedFrames;
-Real rate,dur;
+Real rate,dur,confidence;
+
 
 int main(int argc, const char * argv[]) {
-	
+
 	string audioFilename = argv[1];
 
 	mat R = runAnalysis(audioFilename);
 	
-//	R = downsample(R, 2);
-
-	cout << R.size() << endl;
-
-//	embed(R);
+	R = beatsync(R,onsets);
 	
-	mat RP = recurrence_matrix(R);
+//	R = downsample(R, 1);
+	
+	embed(R,10);
+	
+	mat RP = recurrence_matrix(R,atoi(argv[2]));
 	
 	cout << "Writing" << endl;
 	
 	write_matrix(RP);
-	
 	
 	return 0;
 }
@@ -80,14 +84,14 @@ int main(int argc, const char * argv[]) {
 mat runAnalysis(string audiopath)
 {
 	
-	
 	essentia::init();
 	
 	//Algorithms
 	AlgorithmFactory& factory = standard::AlgorithmFactory::instance();
 	Algorithm* audio = factory.create("EasyLoader","filename",audiopath);
+	Algorithm* window = factory.create("Windowing","size",frameSize,"type","blackmanharris62");
 	Algorithm* duration = factory.create("Duration");
-	Algorithm* onsetDetection = factory.create("OnsetRate");
+	Algorithm* onsetDetection = factory.create("BeatTrackerDegara","maxTempo",160);
 	Algorithm* framecutter = factory.create("FrameCutter","frameSize",frameSize,"hopSize",hopSize);
 	Algorithm* fft = factory.create("Spectrum","size",frameSize);
 	Algorithm* peaks = factory.create("SpectralPeaks");
@@ -102,10 +106,13 @@ mat runAnalysis(string audiopath)
 	framecutter->input("signal").set(audioBuffer);
 	framecutter->output("frame").set(frame);
 	
-	fft->input("frame").set(frame);
+	window->input("frame").set(frame);
+	window->output("frame").set(wframe);
+	
+	fft->input("frame").set(wframe);
 	fft->output("spectrum").set(spectrum);
 	
-	peaks->input("spectrum").set(frame);
+	peaks->input("spectrum").set(spectrum);
 	peaks->output("frequencies").set(peakF);
 	peaks->output("magnitudes").set(peakM);
 	
@@ -114,15 +121,14 @@ mat runAnalysis(string audiopath)
 	hpcp->output("hpcp").set(chroma);
 	
 	onsetDetection->input("signal").set(audioBuffer);
-	onsetDetection->output("onsets").set(onsets);
-	onsetDetection->output("onsetRate").set(rate);
+	onsetDetection->output("ticks").set(onsets);
+//	onsetDetection->output("confidence").set(confidence);
 	
 	audio->compute();
 	duration->compute();
 	onsetDetection->compute();
-	onsets.push_back(dur);
-	
-	int c = 0;
+
+	int counter = 0;
 	
 	mat M;
 	
@@ -132,13 +138,13 @@ mat runAnalysis(string audiopath)
 		if (!frame.size()) {
 			break;
 		}
-		
+
+		window->compute();
 		fft->compute();
 		peaks->compute();
 		hpcp->compute();
-		M.insert_cols(c,conv_to<colvec>::from(chroma));
-		c++;
-		
+		M.insert_rows(counter,conv_to<rowvec>::from(chroma));
+		counter++;
 	}
 	
 	//CleanUp
@@ -192,7 +198,7 @@ void normalizeMatrix(mat& M)
 int col_includes(const Col<size_t> x,const int j) {
 	int val = 0;
 	
-	for (int i = 0; i < x.size(); ++i) {
+	for (int i = 0; i < x.size() - 1; ++i) {
 		if (x(i) == j) {
 			val = 1;
 			break;
@@ -202,65 +208,114 @@ int col_includes(const Col<size_t> x,const int j) {
 	return val;
 }
 
-mat recurrence_matrix(mat& M)
+mat recurrence_matrix(mat& M,int metric)
 {
-	int n = M.n_cols;
-	int K = n * 0.001;
+	int n = M.n_rows;
 	mat RP(n,n);
 
-	for  (int i = 0; i < n; ++i) {
-		for (int j = 0; j < n; ++j) {
-			RP(i,j) = sqrt(sum((M.col(j) - M.col(i))));
+	for (int i = 0; i < M.n_rows; ++i) {
+		for (int j = 0; j < M.n_rows; ++j) {
+			if (metric == 0)
+				RP(i,j) = mlpack::metric::SquaredEuclideanDistance::Evaluate(M.row(i),M.row(j));
+			else
+				RP(i,j) = mlpack::kernel::CosineDistance::Evaluate(M.row(i),M.row(j));
 		}
 	}
 	
-//	RP = cor(M,M.t());
 //	AllkNN a(M);
 //	Mat<size_t> resultingNeighbors;
 //	mat resultingDistances;
-//
+//	int K = M.size() * 0.8;
 //	a.Search(K,resultingNeighbors,resultingDistances);
 //	int n2 = resultingNeighbors.n_cols;
+//	RP.resize(n2,n2);
 //
-//	for (int i = 0; i < n; ++i) {
-//		for (int j = 0; j < n; ++j) {
+//	for (int i = 0; i < n2; ++i) {
+//		for (int j = 0; j < n2; ++j) {
 //			RP(i,j) =	1 - (col_includes(resultingNeighbors.col(i),j)
 //						&&
 //						col_includes(resultingNeighbors.col(j),i));
 //		}
-//		cout << "-------> " << (i/(float)n2)*100 << "%...\r";
-//		cout.flush();
 //	}
 	return RP;
 }
 
-void embed(mat& M)
+void embed(mat& M, int m)
 {
 	int t = 1;
-	int m = 10;
-	int n = (int)M.n_cols - (m-1);
+	int n = (int)M.n_rows - (m-1);
 	
 	mat H;
 	
 	for (int i = 0; i < n;++i) {
-		colvec x = M.col(i);
+		rowvec x = M.row(i);
 		for (int j = 0; j < m;++j) {
-			x = join_cols(x,M.col(i+j));
+			x = join_rows(x,M.row(i+j));
 		}
-		H.insert_cols(i,x);
+		H.insert_rows(i,x);
 	}
 	M = H;
 }
 
 mat downsample(mat& X,int v)
 {
-	int n = X.n_cols;
+	int n = X.n_rows;
 	mat H;
 	for (int i=0; i < n/v;++i) {
-		Mat<double> Y = X.cols(i*v,((i+1)*v)-1);
-		colvec sumy = sum(Y,1);
-		H.insert_cols(i,sumy);
+		Mat<double> Y = X.rows(i*v,((i+1)*v)-1);
+		rowvec sumy = mean(Y);
+		H.insert_rows(i,sumy);
 	}
 	return H;
 }
 
+mat beatsync(mat& X,std::vector<Real> p)
+{
+//	int n = X.n_rows;
+	mat H;
+	int x,y;
+	p.push_back((X.n_rows-1) / FRAMEDUR);
+
+	for (int i=1; i < p.size();++i) {
+		x = p[i-1] * FRAMEDUR;
+		y = p[i] * FRAMEDUR;
+//		cout << x << " " << y << endl;
+		Mat<double> Y = X.rows(x,y);
+		rowvec sumy = mean(Y);
+		H.insert_rows(i-1,sumy);
+	}
+	
+	return H;
+}
+
+mat ckernel(int n)
+{
+	double sigma = 1;
+	double r, s = 2.0 * sigma * sigma;
+	double sum = 0.0;
+	
+	mat kernel(n,n);
+	
+	int halfn = n / 2;
+	
+	for (int i = halfn * -1;i < halfn; ++i) {
+		for (int j = halfn * -1;j < halfn; ++j) {
+			r = sqrt(i*i + j*j);
+			kernel(i+halfn,j+halfn) = (exp(-(r*r)/s)) / (M_PI * s);
+			sum += kernel(i+halfn,j+halfn);
+		}
+	}
+	
+	for (int i = 0; i < n; ++i) {
+		for (int j = 0; j < kernel.n_rows; ++j) {
+			if (((i < halfn) && (j < halfn)) || ((i >= halfn) && (j >= halfn))) {
+				kernel(i,j) *= 1;
+			} else {
+				kernel(i,j) *= -1;
+			}
+		}
+	}
+	
+	
+	return kernel;
+}
