@@ -37,20 +37,29 @@ void medianFilter(mat& M, int k = 8);
 mat recurrence_matrix(mat& M,int metric = 1);
 mat downsample(mat& X,int v);
 mat beatsync(mat& X,std::vector<Real> p);
-mat ckernel(int n);
+mat ckernel(int n,double sigma);
+std::vector<double> correlate(Mat<double> matrix,Mat<double> kernel);
+
 void embed(mat& M,int m = 10);
 
+void plotCorrelation(std::vector<double> v);
 void noveltyCurve();
 void pickPeaks();
 void circularShift();
 void segment();
 
+std::vector<double> peak_detection(std::vector<double>data,double thresh);
+double auto_threshold(std::vector<double>data,double thresh);
+double mean(std::vector<double>x);
+void write_audacity_labels(std::vector<double> peaks,std::vector<Real> onset_times,int offset = 1);
+
 void normalizeMatrix(mat& m);
 void write_matrix(mat& m);
+std::vector<double> normalize(std::vector<double> input);
 
 const int SAMPLERATE = 44100;
-const int frameSize = 4096;
-const int hopSize = 4096;
+const int frameSize = 8192;
+const int hopSize = 8192;
 const double FRAMEDUR = SAMPLERATE/(double)frameSize;
 
 //Analysis Output Storage
@@ -64,20 +73,44 @@ int main(int argc, const char * argv[]) {
 
 	string audioFilename = argv[1];
 
+    cout << "Running Analysis" << endl;
+    
 	mat R = runAnalysis(audioFilename);
 	
+	cout << "Beat-syncing" << endl;
+    
 	R = beatsync(R,onsets);
+	   
+//	R = downsample(R, 4);
 	
-//	R = downsample(R, 1);
+//	embed(R,5);
 	
-	embed(R,10);
+	cout << "Calculating Distance Matrix" << endl;
+    
+	mat RP = recurrence_matrix(R,1);
 	
-	mat RP = recurrence_matrix(R,atoi(argv[2]));
-	
-	cout << "Writing" << endl;
+	cout << "Writing Matrix" << endl;
 	
 	write_matrix(RP);
+    
+    int n = RP.n_cols * 0.1;
+    
+    cout << n << endl;
+    
+    mat GK = ckernel(n,n/5);
+
+	cout << "Correlating Kernel" << endl;
+    
+    std::vector<double> corr = normalize(correlate(RP, GK));
+    
+    plotCorrelation(corr);
 	
+    cout << "Peak Detection" << endl;
+    
+    std::vector<double> peaks = peak_detection(corr,2);
+    
+    write_audacity_labels(peaks, onsets);
+    
 	return 0;
 }
 
@@ -91,7 +124,7 @@ mat runAnalysis(string audiopath)
 	Algorithm* audio = factory.create("EasyLoader","filename",audiopath);
 	Algorithm* window = factory.create("Windowing","size",frameSize,"type","blackmanharris62");
 	Algorithm* duration = factory.create("Duration");
-	Algorithm* onsetDetection = factory.create("BeatTrackerDegara","maxTempo",160);
+	Algorithm* onsetDetection = factory.create("BeatTrackerDegara","maxTempo",100);
 	Algorithm* framecutter = factory.create("FrameCutter","frameSize",frameSize,"hopSize",hopSize);
 	Algorithm* fft = factory.create("Spectrum","size",frameSize);
 	Algorithm* peaks = factory.create("SpectralPeaks");
@@ -122,7 +155,6 @@ mat runAnalysis(string audiopath)
 	
 	onsetDetection->input("signal").set(audioBuffer);
 	onsetDetection->output("ticks").set(onsets);
-//	onsetDetection->output("confidence").set(confidence);
 	
 	audio->compute();
 	duration->compute();
@@ -169,7 +201,7 @@ void write_matrix(mat& m)
 	
 	myfile.close();
 
-	system("gnuplot plotchroma.gnuplot");
+	system("gnuplot plotmatrix.gnuplot");
 }
 
 void medianFilter(mat& M, int k)
@@ -288,34 +320,210 @@ mat beatsync(mat& X,std::vector<Real> p)
 	return H;
 }
 
-mat ckernel(int n)
+mat ckernel(int n,double sigma)
 {
-	double sigma = 1;
-	double r, s = 2.0 * sigma * sigma;
-	double sum = 0.0;
-	
-	mat kernel(n,n);
-	
-	int halfn = n / 2;
-	
-	for (int i = halfn * -1;i < halfn; ++i) {
-		for (int j = halfn * -1;j < halfn; ++j) {
-			r = sqrt(i*i + j*j);
-			kernel(i+halfn,j+halfn) = (exp(-(r*r)/s)) / (M_PI * s);
-			sum += kernel(i+halfn,j+halfn);
-		}
-	}
-	
-	for (int i = 0; i < n; ++i) {
-		for (int j = 0; j < kernel.n_rows; ++j) {
-			if (((i < halfn) && (j < halfn)) || ((i >= halfn) && (j >= halfn))) {
-				kernel(i,j) *= 1;
-			} else {
-				kernel(i,j) *= -1;
-			}
-		}
-	}
-	
-	
-	return kernel;
+    mat checker_kernel(n,n);
+    
+    int t;
+    
+    double half_n = n / 2.0;
+    // double sigma = 4.25;
+    double r,s = (n * 0.5) * sigma * sigma;
+    double sum = 0.0;
+    
+    //checkboard kernel with gaussian smoothing
+    for (int i = 0;  i < n;  ++i)
+    {
+        double x = i - half_n;
+        for (int j = 0;  j < n;  ++j)
+        {
+            double y = j - half_n;
+            r = sqrt(x*x + y*y);
+            if (i<half_n) {
+                if (j<half_n) {
+                    t=1;
+                } else {
+                    t=-1;
+                }
+            } else {
+                if (j<half_n) {
+                    t=-1;
+                } else {
+                    t=1;
+                }
+            }
+            checker_kernel.at(i,j) = (exp(-(r*r)/s))/(M_PI * s) * t;
+            sum += checker_kernel.at(i,j);
+        }
+    }
+    
+    for (int i=0; i < n; ++i) {
+        for (int j=0; j < n; ++j) {
+            checker_kernel.at(i,j) /= sum;
+        }
+    }
+    
+//    ofstream kernelfile("/Users/itma/Documents/HPCP/kernel.txt");
+//    
+//    for (int i=0; i < n;++i) {
+//        for (int j=0;j < n;++j) {
+//            kernelfile << i << " " << j << " " << checker_kernel(i,j) << endl;
+//        }
+//        kernelfile << endl;
+//    }
+//    kernelfile.close();
+    
+    return checker_kernel;
+}
+
+std::vector<double> correlate(Mat<double> matrix,Mat<double> kernel)
+{
+    int n = kernel.n_rows - 1;
+    std::vector<double> novelty;
+    
+    for (int i = n * -1 ; i != matrix.n_rows ; ++i) {
+        double corr = 0.0;
+        //zero padding
+        if (i < 0) {
+            for (int j=0 ; j < n  ; ++j) {
+                for (int k=0 ; k < n ; ++k) {
+                    if ((i+j >= 0) && (i+k >= 0)) {
+                        corr += matrix(i+j,i+k) * kernel(j,k);
+                    }
+                }
+            }
+        }
+        else if ((i > 0) && (i < matrix.n_rows - n)) {
+            for (int j=0 ; j < n  ; ++j) {
+                for (int k=0 ; k < n ; ++k) {
+                    corr += matrix(i+j,i+k) * kernel(j,k);
+                }
+            }
+        } else if (i >= matrix.n_rows - n) {
+            for (int j=0 ; j < n  ; ++j) {
+                for (int k=0 ; k < n ; ++k) {
+                    if ((i+j < (matrix.n_rows-1)) &&
+                        (i+k < (matrix.n_rows-1))) {
+                        corr += matrix(i+j,i+k) * kernel(j,k);
+                    }
+                }
+            }
+        }
+        novelty.push_back(corr);
+    }
+    
+    return novelty;
+}
+
+void plotCorrelation(std::vector<double> v)
+{
+    ofstream novelty("novelty.txt");
+    
+    for (int i = 0 ; i < v.size();++i) {
+        novelty << i << " " << v[i] << endl;
+    }
+    
+    novelty.close();
+    system("gnuplot 'novelty.gnu'");
+}
+
+std::vector<double> normalize(std::vector<double> input)
+{
+    std::vector<double> output;
+    double max = *max_element(input.begin(),input.end());
+    double min = *min_element(input.begin(),input.end());
+    
+    for (int i=1;i<input.size();++i) {
+        output.push_back((input[i] - min) / (max-min));
+    }
+    return output;
+}
+
+double mean(std::vector<double>x)
+{
+    double sum = std::accumulate(x.begin(),x.end(),0.0);
+    return sum / x.size();
+}
+
+double auto_threshold(std::vector<double>data,double thresh)
+{
+    double e = thresh;
+    double c1 = data[0];
+    double c2 = data[1];
+    double lastc1 = c1;
+    double lastc2 = c2;
+    while (true) {
+        std::vector<double> class1,class2;
+        for (int i = 0; i < data.size(); ++i) {
+            if (abs(c1 - data[i]) < abs(c2 - data[i])) {
+                class1.push_back(data[i]);
+            } else {
+                class2.push_back(data[i]);
+            }
+        }
+        c2 = mean(class2);
+        c1 = mean(class1);
+        if ((abs(lastc2 - c2) < e) and (abs(lastc1 - c1) < e)) {
+            if (class1.size() > class2.size()) {
+                return c1;
+            } else {
+                return c2;
+            }
+        }
+        lastc2 = c2;
+        lastc1 = c1;
+    }
+}
+std::vector<double> peak_detection(std::vector<double>data,double thresh)
+{
+    double e = auto_threshold(data,thresh);
+    std::vector<double> p,t;
+    int a = 0,b = 0,d = 0;
+    int i = -1;
+    int xl = ((int)data.size() - 1);
+    while (i != xl) {
+        ++i;
+        if (d == 0) {
+            if (data[a] >= (data[i] + e)) {
+                d = 2;
+            } else if (data[i] >= (data[b] + e)) {
+                d = 1;
+            }
+            if (data[a] <= data[i]) {
+                a = i;
+            } else if (data[i] <= data[b]) {
+                b = i;
+            }
+        } else if (d == 1) {
+            if (data[a] <= data[i]) {
+                a = i;
+            } else if (data[a] >= (data[i] + e)) {
+                p.push_back(a);
+                b = i;
+                d = 2;
+            }
+        } else if (d == 2) {
+            if (data[i] <= data[b]) {
+                b = i;
+            } else if (data[i] >= (data[b] + e)) {
+                t.push_back(b);
+                a = i;
+                d = 1;
+            }
+        }
+    }
+    //    cout << p << endl;
+    return p;
+}
+
+void write_audacity_labels(std::vector<double> peaks,std::vector<Real> onset_times,int offset)
+{
+    ofstream audacity_labels;
+    
+    audacity_labels.open("audacity_labels.txt");
+    
+    for (int i = 0; i < peaks.size() ; ++i) {
+        audacity_labels << onset_times[peaks[i]] << "\tEvent\n";
+    }
+    audacity_labels.close();
 }
