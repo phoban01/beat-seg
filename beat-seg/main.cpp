@@ -58,8 +58,8 @@ void write_matrix(mat& m);
 std::vector<double> normalize(std::vector<double> input);
 
 const int SAMPLERATE = 44100;
-const int frameSize = 8192;
-const int hopSize = 8192;
+const int frameSize = 4096;
+const int hopSize = 1024;
 const double FRAMEDUR = SAMPLERATE/(double)frameSize;
 
 //Analysis Output Storage
@@ -80,10 +80,10 @@ int main(int argc, const char * argv[]) {
 	cout << "Beat-syncing" << endl;
     
 	R = beatsync(R,onsets);
-	   
-//	R = downsample(R, 4);
 	
-//	embed(R,5);
+//	R = downsample(R,2);
+	
+	embed(R,atoi(argv[2]));
 	
 	cout << "Calculating Distance Matrix" << endl;
     
@@ -92,12 +92,12 @@ int main(int argc, const char * argv[]) {
 	cout << "Writing Matrix" << endl;
 	
 	write_matrix(RP);
-    
-    int n = RP.n_cols * 0.1;
-    
-    cout << n << endl;
-    
-    mat GK = ckernel(n,n/5);
+	
+	//256 is good value
+	int n = 128;
+	
+	//2 isn't a bad value for sigma
+    mat GK = ckernel(n,1);
 
 	cout << "Correlating Kernel" << endl;
     
@@ -107,10 +107,10 @@ int main(int argc, const char * argv[]) {
 	
     cout << "Peak Detection" << endl;
     
-    std::vector<double> peaks = peak_detection(corr,2);
+    std::vector<double> peaks = peak_detection(corr,0.1);
     
-    write_audacity_labels(peaks, onsets);
-    
+    write_audacity_labels(peaks, onsets,1);
+	
 	return 0;
 }
 
@@ -124,7 +124,7 @@ mat runAnalysis(string audiopath)
 	Algorithm* audio = factory.create("EasyLoader","filename",audiopath);
 	Algorithm* window = factory.create("Windowing","size",frameSize,"type","blackmanharris62");
 	Algorithm* duration = factory.create("Duration");
-	Algorithm* onsetDetection = factory.create("BeatTrackerDegara","maxTempo",100);
+	Algorithm* onsetDetection = factory.create("BeatTrackerDegara","maxTempo",160);
 	Algorithm* framecutter = factory.create("FrameCutter","frameSize",frameSize,"hopSize",hopSize);
 	Algorithm* fft = factory.create("Spectrum","size",frameSize);
 	Algorithm* peaks = factory.create("SpectralPeaks");
@@ -206,7 +206,6 @@ void write_matrix(mat& m)
 
 void medianFilter(mat& M, int k)
 {
-	cout << M.n_rows << endl;
 	for (int i = 0 ; i < M.n_rows; ++i) {
 		for (int j = 0 ; j < M.n_cols - k/2; ++j) {
 			if (j < k/2) {
@@ -357,12 +356,12 @@ mat ckernel(int n,double sigma)
         }
     }
     
-    for (int i=0; i < n; ++i) {
-        for (int j=0; j < n; ++j) {
-            checker_kernel.at(i,j) /= sum;
-        }
-    }
-    
+//    for (int i=0; i < n; ++i) {
+//        for (int j=0; j < n; ++j) {
+//            checker_kernel.at(i,j) /= sum;
+//        }
+//    }
+	
 //    ofstream kernelfile("/Users/itma/Documents/HPCP/kernel.txt");
 //    
 //    for (int i=0; i < n;++i) {
@@ -381,7 +380,7 @@ std::vector<double> correlate(Mat<double> matrix,Mat<double> kernel)
     int n = kernel.n_rows - 1;
     std::vector<double> novelty;
     
-    for (int i = n * -1 ; i != matrix.n_rows ; ++i) {
+    for (int i = n * -0.5 ; i != matrix.n_rows ; ++i) {
         double corr = 0.0;
         //zero padding
         if (i < 0) {
@@ -523,7 +522,7 @@ void write_audacity_labels(std::vector<double> peaks,std::vector<Real> onset_tim
     audacity_labels.open("audacity_labels.txt");
     
     for (int i = 0; i < peaks.size() ; ++i) {
-        audacity_labels << onset_times[peaks[i]] << "\tEvent\n";
+        audacity_labels << onset_times[peaks[i]*offset] << "\tEvent\n";
     }
     audacity_labels.close();
 }
