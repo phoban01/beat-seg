@@ -78,66 +78,73 @@ int main(int argc, const char * argv[]) {
 
 	string audioFilename = argv[1];
 
+	int embedDimension = atoi(argv[2]);
+	
     cout << "--> Running Analysis" << endl;
 	mat R = runAnalysis(audioFilename);
 	
 	cout << "--> Beat-syncing" << endl;
 	R = beatsync(R,onsets);
 	
-//	R = downsample(R,2);
+//	R = downsample(R,10);
 	
-	embed(R,atoi(argv[2]));
+	embed(R,embedDimension);
 	
 	cout << "--> Calculating Distance Matrix" << endl;
 //	mat RP = similarity_matrix(R,1);
 	mat RP = recurrence_matrix(R,atof(argv[4]));
-
-//	cout << "--> Circular Shifting" << endl;
-//	RP = circularShift(RP);
-//
-//	medianFilter(RP,RP.n_rows * atof(argv[3]));
 	
+	cout << "--> Circular Shifting" << endl;
+	RP = circularShift(RP);
+
+	medianFilter(RP,RP.n_rows * atof(argv[3]));
+
 	cout << "---> Writing Matrix" << endl;
 	write_matrix(RP);
 	
-//	std::vector<double> nc = noveltycurve(RP);
-//
-//	plotCorrelation(nc);
+	std::vector<double> nc = normalize(noveltycurve(RP));
+
+    plotCorrelation(nc);
+
+    cout << "---> Peak Detection" << endl;
+
+    std::vector<double> peaks = peak_detection(nc,1);
+
+	for (int i = 0; i < peaks.size();++i) {
+		peaks[i] += embedDimension / 2;
+	}
 	
-//	//256 is good value
-//	int n = 128;
-//	
-//	//2 isn't a bad value for sigma
-//    mat GK = ckernel(n,1);
-//
-//	cout << "Correlating Kernel" << endl;
-//    
-//    std::vector<double> corr = normalize(correlate(RP, GK));
-//    
-//    plotCorrelation(corr);
-//	
-//    cout << "Peak Detection" << endl;
-//    
-//    std::vector<double> peaks = peak_detection(corr,0.1);
-//    
-//    write_audacity_labels(peaks, onsets,1);
-//	
+	cout << peaks << endl;
+	
+    write_audacity_labels(peaks, onsets,1);
+
 	return 0;
+}
+
+int wrap(int value,int max)
+{
+	if (value < 0) {
+		return max + value;
+	} else if (value >= max) {
+		return value % max;
+	} else {
+		return value;
+	}
 }
 
 mat circularShift(mat& M)
 {
 	int n = M.n_rows;
-	
+	int k;
 	mat L(n,n);
-	
 	for (int i = 0; i < n; ++i) {
 		for (int j = 0; j < n; ++j) {
-			L(i,j) = M((i+j)%n,j);
+			k = wrap(i+wrap(j/-2,n),n)+1;
+			L(i,j) = M(i,wrap(k,n));
 		}
 	}
 	
-	return L;
+	return L.t();
 	
 }
 
