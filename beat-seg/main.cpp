@@ -34,7 +34,9 @@ using namespace mlpack::neighbor;
 //functions
 mat runAnalysis(string audiopath);
 void medianFilter(mat& M, int k = 8);
-mat recurrence_matrix(mat& M,int metric = 1);
+mat recurrence_matrix(mat& M,float thresh = 0.1);
+mat similarity_matrix(mat& M,int metric = 1);
+
 mat downsample(mat& X,int v);
 mat beatsync(mat& X,std::vector<Real> p);
 mat ckernel(int n,double sigma);
@@ -42,10 +44,11 @@ std::vector<double> correlate(Mat<double> matrix,Mat<double> kernel);
 
 void embed(mat& M,int m = 10);
 
+mat circularShift(mat& M);
+
 void plotCorrelation(std::vector<double> v);
-void noveltyCurve();
+std::vector<double> noveltycurve(mat& M);
 void pickPeaks();
-void circularShift();
 void segment();
 
 std::vector<double> peak_detection(std::vector<double>data,double thresh);
@@ -57,9 +60,11 @@ void normalizeMatrix(mat& m);
 void write_matrix(mat& m);
 std::vector<double> normalize(std::vector<double> input);
 
+rowvec slice(mat& M,int row_index,int start,int stop);
+
 const int SAMPLERATE = 44100;
 const int frameSize = 4096;
-const int hopSize = 1024;
+const int hopSize = 4096;
 const double FRAMEDUR = SAMPLERATE/(double)frameSize;
 
 //Analysis Output Storage
@@ -73,45 +78,67 @@ int main(int argc, const char * argv[]) {
 
 	string audioFilename = argv[1];
 
-    cout << "Running Analysis" << endl;
-    
+    cout << "--> Running Analysis" << endl;
 	mat R = runAnalysis(audioFilename);
 	
-	cout << "Beat-syncing" << endl;
-    
+	cout << "--> Beat-syncing" << endl;
 	R = beatsync(R,onsets);
 	
 //	R = downsample(R,2);
 	
 	embed(R,atoi(argv[2]));
 	
-	cout << "Calculating Distance Matrix" << endl;
-    
-	mat RP = recurrence_matrix(R,1);
+	cout << "--> Calculating Distance Matrix" << endl;
+//	mat RP = similarity_matrix(R,1);
+	mat RP = recurrence_matrix(R,atof(argv[4]));
+
+//	cout << "--> Circular Shifting" << endl;
+//	RP = circularShift(RP);
+//
+//	medianFilter(RP,RP.n_rows * atof(argv[3]));
 	
-	cout << "Writing Matrix" << endl;
-	
+	cout << "---> Writing Matrix" << endl;
 	write_matrix(RP);
 	
-	//256 is good value
-	int n = 128;
+//	std::vector<double> nc = noveltycurve(RP);
+//
+//	plotCorrelation(nc);
 	
-	//2 isn't a bad value for sigma
-    mat GK = ckernel(n,1);
-
-	cout << "Correlating Kernel" << endl;
-    
-    std::vector<double> corr = normalize(correlate(RP, GK));
-    
-    plotCorrelation(corr);
-	
-    cout << "Peak Detection" << endl;
-    
-    std::vector<double> peaks = peak_detection(corr,0.1);
-    
-    write_audacity_labels(peaks, onsets,1);
-	
+//	//256 is good value
+//	int n = 128;
+//	
+//	//2 isn't a bad value for sigma
+//    mat GK = ckernel(n,1);
+//
+//	cout << "Correlating Kernel" << endl;
+//    
+//    std::vector<double> corr = normalize(correlate(RP, GK));
+//    
+//    plotCorrelation(corr);
+//	
+//    cout << "Peak Detection" << endl;
+//    
+//    std::vector<double> peaks = peak_detection(corr,0.1);
+//    
+//    write_audacity_labels(peaks, onsets,1);
+//	
 	return 0;
+}
+
+mat circularShift(mat& M)
+{
+	int n = M.n_rows;
+	
+	mat L(n,n);
+	
+	for (int i = 0; i < n; ++i) {
+		for (int j = 0; j < n; ++j) {
+			L(i,j) = M((i+j)%n,j);
+		}
+	}
+	
+	return L;
+	
 }
 
 mat runAnalysis(string audiopath)
@@ -206,12 +233,13 @@ void write_matrix(mat& m)
 
 void medianFilter(mat& M, int k)
 {
-	for (int i = 0 ; i < M.n_rows; ++i) {
-		for (int j = 0 ; j < M.n_cols - k/2; ++j) {
-			if (j < k/2) {
-				M.at(i,j) = median(M.cols(j,j+k/2)(i));
+	int n = M.n_rows - 1;
+	for (int i = 0 ; i < n; ++i) {
+		for (int j = 0 ; j < n; ++j) {
+			if (j+k <= n) {
+				M(i,j) = median(slice(M,i,j,j+k));
 			} else {
-				M.at(i,j) = median(M.cols(j-k/2,j+k/2)(i));
+				M(i,j) = median(slice(M,i,j,n));
 			}
 	 	}
 	}
@@ -239,7 +267,27 @@ int col_includes(const Col<size_t> x,const int j) {
 	return val;
 }
 
-mat recurrence_matrix(mat& M,int metric)
+mat recurrence_matrix(mat& M,float thresh)
+{
+	AllkNN a(M.t());
+	Mat<size_t> resultingNeighbors;
+	mat resultingDistances;
+	int K = M.n_rows * thresh;
+	a.Search(K,resultingNeighbors,resultingDistances);
+	int n = resultingNeighbors.n_cols;
+	mat RP(n,n);
+	
+	for (int i = 0; i < n; ++i) {
+		for (int j = 0; j < n; ++j) {
+			RP(i,j) =	1 - (col_includes(resultingNeighbors.col(i),j)
+						&&
+						col_includes(resultingNeighbors.col(j),i));
+		}
+	}
+	return RP;
+}
+
+mat similarity_matrix(mat& M,int metric)
 {
 	int n = M.n_rows;
 	mat RP(n,n);
@@ -252,23 +300,20 @@ mat recurrence_matrix(mat& M,int metric)
 				RP(i,j) = mlpack::kernel::CosineDistance::Evaluate(M.row(i),M.row(j));
 		}
 	}
-	
-//	AllkNN a(M);
-//	Mat<size_t> resultingNeighbors;
-//	mat resultingDistances;
-//	int K = M.size() * 0.8;
-//	a.Search(K,resultingNeighbors,resultingDistances);
-//	int n2 = resultingNeighbors.n_cols;
-//	RP.resize(n2,n2);
-//
-//	for (int i = 0; i < n2; ++i) {
-//		for (int j = 0; j < n2; ++j) {
-//			RP(i,j) =	1 - (col_includes(resultingNeighbors.col(i),j)
-//						&&
-//						col_includes(resultingNeighbors.col(j),i));
-//		}
-//	}
 	return RP;
+}
+
+std::vector<double> noveltycurve(mat& M)
+{
+	std::vector<double> nc;
+	int n = M.n_cols - 1;
+	for (int i = 0; i < n; ++i) {
+		nc.push_back(mlpack::metric::SquaredEuclideanDistance::Evaluate(M.col(i),M.col(i+1)));
+	}
+	
+	nc = normalize(nc);
+	
+	return nc;
 }
 
 void embed(mat& M, int m)
@@ -362,7 +407,7 @@ mat ckernel(int n,double sigma)
 //        }
 //    }
 	
-//    ofstream kernelfile("/Users/itma/Documents/HPCP/kernel.txt");
+//    ofstream kernelfile("kernel.txt");
 //    
 //    for (int i=0; i < n;++i) {
 //        for (int j=0;j < n;++j) {
@@ -526,3 +571,18 @@ void write_audacity_labels(std::vector<double> peaks,std::vector<Real> onset_tim
     }
     audacity_labels.close();
 }
+
+
+rowvec slice(mat& M,int row_index,int start,int stop)
+{
+	rowvec xr(stop - start);
+	int counter = 0;
+	for (int i = start; i < stop-1; ++i) {
+		xr(counter) = M.row(row_index)(i);
+		counter++;
+	}
+	
+	return xr;
+	
+}
+
