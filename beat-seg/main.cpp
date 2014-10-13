@@ -45,6 +45,7 @@ std::vector<double> correlate(Mat<double> matrix,Mat<double> kernel);
 void embed(mat& M,int m = 10);
 
 mat circularShift(mat& M);
+void gaussian_blur(mat& M,float size,float sigma);
 
 void plotCorrelation(std::vector<double> v);
 std::vector<double> noveltycurve(mat& M);
@@ -92,13 +93,13 @@ int main(int argc, const char * argv[]) {
 	
 	cout << "--> Calculating Distance Matrix" << endl;
 //	mat RP = similarity_matrix(R,1);
-	mat RP = recurrence_matrix(R,atof(argv[4]));
+	mat RP = recurrence_matrix(R,atof(argv[3]));
 	
 	cout << "--> Circular Shifting" << endl;
-	RP = circularShift(RP);
+	RP = circularShift(RP).t();
 
-	medianFilter(RP,RP.n_rows * atof(argv[3]));
-
+	gaussian_blur(RP,0.2,10);
+	
 	cout << "---> Writing Matrix" << endl;
 	write_matrix(RP);
 	
@@ -106,17 +107,17 @@ int main(int argc, const char * argv[]) {
 
     plotCorrelation(nc);
 
-    cout << "---> Peak Detection" << endl;
-
-    std::vector<double> peaks = peak_detection(nc,1);
-
-	for (int i = 0; i < peaks.size();++i) {
-		peaks[i] += embedDimension / 2;
-	}
-	
-	cout << peaks << endl;
-	
-    write_audacity_labels(peaks, onsets,1);
+//    cout << "---> Peak Detection" << endl;
+//
+//    std::vector<double> peaks = peak_detection(nc,3);
+//
+//	for (int i = 0; i < peaks.size();++i) {
+//		peaks[i] += embedDimension / 2;
+//	}
+//	
+//	cout << peaks << endl;
+//	
+//    write_audacity_labels(peaks, onsets,1);
 
 	return 0;
 }
@@ -139,12 +140,12 @@ mat circularShift(mat& M)
 	mat L(n,n);
 	for (int i = 0; i < n; ++i) {
 		for (int j = 0; j < n; ++j) {
-			k = wrap(i+wrap(j/-2,n),n)+1;
+			k = wrap(i+j,n)+1;
 			L(i,j) = M(i,wrap(k,n));
 		}
 	}
 	
-	return L.t();
+	return L;
 	
 }
 
@@ -313,12 +314,10 @@ mat similarity_matrix(mat& M,int metric)
 std::vector<double> noveltycurve(mat& M)
 {
 	std::vector<double> nc;
-	int n = M.n_cols - 1;
+	int n = M.n_rows - 1;
 	for (int i = 0; i < n; ++i) {
-		nc.push_back(mlpack::metric::SquaredEuclideanDistance::Evaluate(M.col(i),M.col(i+1)));
+		nc.push_back(mlpack::metric::SquaredEuclideanDistance::Evaluate(M.row(i),M.row(i+1)));
 	}
-	
-	nc = normalize(nc);
 	
 	return nc;
 }
@@ -462,7 +461,7 @@ std::vector<double> correlate(Mat<double> matrix,Mat<double> kernel)
         }
         novelty.push_back(corr);
     }
-    
+    //novelty curve
     return novelty;
 }
 
@@ -593,3 +592,74 @@ rowvec slice(mat& M,int row_index,int start,int stop)
 	
 }
 
+double gaussian(double x, double mu, double sigma) {
+	return exp( -(((x-mu)/(sigma))*((x-mu)/(sigma)))/2.0 );
+}
+
+std::vector<float>  gausswin(int n,double sigma)
+{
+	std::vector<float> window;
+	window.resize(n);
+	int half_n = n / 2;
+	double sum = 0;
+	for (int i= -(half_n);i <= half_n;++i) {
+		window[i+half_n] = gaussian(i,0,sigma);
+		sum += window[i+half_n];
+	}
+	
+	for (int i=0;i<n;++i) {
+		window[i] /= sum;
+	}
+	
+	return window;
+}
+
+int reflect(int M, int x)
+{
+	if(x < 0)
+	{
+		return -x - 1;
+	}
+	if(x >= M)
+	{
+		return 2*M - x - 1;
+	}
+	
+	return x;
+}
+
+void gaussian_blur(mat& M,float size,float sigma)
+{
+	int n = M.n_rows;
+	int win_size = n * size;
+	int halfw = win_size / 2;
+//	double sigma = 20;
+	std::vector<float> coeffs = gausswin(win_size,sigma);
+	
+	Mat<float> temp(n,n);
+	float sum,x1,y1;
+	
+	//    // along y - direction
+	for(int y = 0; y < n; y++){
+		for(int x = 0; x < n; x++){
+			sum = 0.0;
+			for(int i = halfw*-1; i <= halfw; i++){
+				y1 = reflect(n, y - i);
+				sum = sum + coeffs[i + halfw]*M(y1, x);
+			}
+			temp(y,x) = sum;
+		}
+	}
+	
+	// along x - direction
+	for(int y = 0; y < n; y++){
+		for(int x = 0; x < n; x++){
+			sum = 0.0;
+			for(int i =halfw*-1; i <= halfw; i++){
+				x1 = reflect(n, x - i);
+				sum = sum + coeffs[i + halfw]*M(y, x1);
+			}
+			M(y,x) = sum;
+		}
+	}
+}
